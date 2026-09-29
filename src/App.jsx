@@ -290,6 +290,18 @@ export default function App() {
 
   // 5. Thao tác bảng
   const handleUndo = () => {
+    // 1. Optimistic UI Update: Phản hồi ngay lập tức trên màn hình của mình (độ trễ 0ms)
+    const mySegments = allSegmentsRef.current.filter(s => s.senderId === SENDER_ID);
+    if (mySegments.length > 0) {
+      // Tìm ID của nét vẽ cuối cùng mình vừa vẽ
+      const lastStrokeId = mySegments[mySegments.length - 1].strokeId;
+      
+      // Xóa nét vẽ đó khỏi bộ nhớ tạm và vẽ lại màn hình ngay lập tức
+      allSegmentsRef.current = allSegmentsRef.current.filter(s => s.strokeId !== lastStrokeId);
+      redrawAllSegments();
+    }
+
+    // 2. Gửi lệnh lên server để xóa trong DB và đồng bộ với màn hình của người khác
     if (stompClientRef.current && stompClientRef.current.connected) {
       stompClientRef.current.publish({
         destination: '/app/undo',
