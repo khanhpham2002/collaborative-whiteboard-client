@@ -15,7 +15,8 @@ import {
   Lock,
   LogOut,
   X,
-  Copy
+  Copy,
+  Check
 } from 'lucide-react';
 
 // Tạo 1 ID ngẫu nhiên cho mỗi tab trình duyệt để phân biệt ai đang vẽ
@@ -41,6 +42,7 @@ export default function WhiteboardRoom() {
   // State quản lý Modal Phòng riêng
   const [showModal, setShowModal] = useState(false);
   const [roomInput, setRoomInput] = useState('');
+  const [copied, setCopied] = useState(false);
 
   const canvasRef = useRef(null);
   const stompClientRef = useRef(null);
@@ -342,7 +344,8 @@ export default function WhiteboardRoom() {
 
   const handleCopyRoomId = () => {
     navigator.clipboard.writeText(roomId);
-    alert('Room code copied to clipboard!');
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleLogout = () => {
@@ -365,10 +368,15 @@ export default function WhiteboardRoom() {
           {roomId !== 'PUBLIC' && (
             <button 
               onClick={handleCopyRoomId}
-              style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+              style={{ 
+                background: 'none', border: 'none', 
+                color: copied ? '#10b981' : '#94a3b8', 
+                cursor: 'pointer', display: 'flex', alignItems: 'center',
+                transition: 'color 0.2s', padding: '4px'
+              }}
               title="Copy Room Code"
             >
-              <Copy size={16} />
+              {copied ? <Check size={16} /> : <Copy size={16} />}
             </button>
           )}
         </div>
