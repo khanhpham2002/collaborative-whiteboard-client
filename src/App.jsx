@@ -37,11 +37,11 @@ export default function App() {
 
   // 1. Kết nối WebSocket STOMP
   useEffect(() => {
-    // Tự động xác định host WebSocket (hỗ trợ cả chạy local và chạy trên Cloud)
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.hostname;
-    const port = window.location.port === '5173' ? '8088' : window.location.port;
-    const brokerURL = `${protocol}//${host}:${port}/ws-whiteboard`;
+    // Xác định backend URL từ env variable hoặc mặc định cho local dev
+    const backendUrl = import.meta.env.VITE_BACKEND_URL || `${window.location.protocol}//${window.location.hostname}:8088`;
+    const wsProtocol = backendUrl.startsWith('https') ? 'wss:' : 'ws:';
+    const backendHost = backendUrl.replace(/^https?:\/\//, '');
+    const brokerURL = `${wsProtocol}//${backendHost}/ws-whiteboard`;
 
     const client = new Client({
       brokerURL: brokerURL,
@@ -141,11 +141,9 @@ export default function App() {
   // Tải lại toàn bộ nét vẽ từ server khi người dùng mới kết nối
   const loadExistingDrawings = async () => {
     try {
-      const host = window.location.hostname;
-      const port = window.location.port === '5173' ? '8088' : window.location.port;
-      const baseUrl = `${window.location.protocol}//${host}:${port}`;
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || `${window.location.protocol}//${window.location.hostname}:8088`;
 
-      const response = await fetch(`${baseUrl}/api/drawings`);
+      const response = await fetch(`${backendUrl}/api/drawings`);
       if (!response.ok) throw new Error('Failed to load drawings');
 
       const drawings = await response.json();
