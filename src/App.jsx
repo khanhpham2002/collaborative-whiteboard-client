@@ -5,7 +5,10 @@ import {
   Eraser, 
   Trash2, 
   Download, 
-  Undo2
+  Undo2,
+  Square,
+  Circle,
+  Minus
 } from 'lucide-react';
 
 // Tạo 1 ID ngẫu nhiên cho mỗi tab trình duyệt để phân biệt ai đang vẽ
@@ -16,13 +19,15 @@ export default function App() {
   const stompClientRef = useRef(null);
 
   const [isConnected, setIsConnected] = useState(false);
-  const [tool, setTool] = useState('pen'); // 'pen' | 'eraser'
+  const [tool, setTool] = useState('pen'); // 'pen' | 'eraser' | 'rect' | 'circle' | 'line'
   const [color, setColor] = useState('#0f172a');
   const [lineWidth, setLineWidth] = useState(4);
   const [isDrawing, setIsDrawing] = useState(false);
 
   // Tọa độ điểm trước đó khi rê chuột
   const prevCoordRef = useRef({ x: 0, y: 0 });
+  // Tọa độ điểm bắt đầu khi vẽ hình khối
+  const startCoordRef = useRef({ x: 0, y: 0 });
   const strokeIdRef = useRef(null);
   const allSegmentsRef = useRef([]); // Lưu trữ toàn bộ nét vẽ để hoàn tác
 
@@ -50,7 +55,7 @@ export default function App() {
           
           // Nếu nét vẽ đến từ người khác thì vẽ lên canvas của mình
           if (data.senderId !== SENDER_ID) {
-            drawOnCanvas(data.prevX, data.prevY, data.currX, data.currY, data.color, data.lineWidth);
+            drawSegment(data);
           }
         });
 
@@ -106,20 +111,29 @@ export default function App() {
     return () => window.removeEventListener('resize', resizeCanvas);
   }, []);
 
-  // 3. Hàm vẽ
-  const drawOnCanvas = (x1, y1, x2, y2, strokeColor, strokeWidth) => {
+  // 3. Hàm vẽ phân loại theo công cụ
+  const drawSegment = (segment, isPreview = false) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
 
     ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.strokeStyle = strokeColor;
-    ctx.lineWidth = strokeWidth;
+    ctx.strokeStyle = segment.color;
+    ctx.lineWidth = segment.lineWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.stroke();
+
+    if (segment.type === 'rect') {
+      ctx.strokeRect(segment.prevX, segment.prevY, segment.currX - segment.prevX, segment.currY - segment.prevY);
+    } else if (segment.type === 'circle') {
+      const radius = Math.sqrt(Math.pow(segment.currX - segment.prevX, 2) + Math.pow(segment.currY - segment.prevY, 2));
+      ctx.arc(segment.prevX, segment.prevY, radius, 0, 2 * Math.PI);
+      ctx.stroke();
+    } else { // pen, eraser, line
+      ctx.moveTo(segment.prevX, segment.prevY);
+      ctx.lineTo(segment.currX, segment.currY);
+      ctx.stroke();
+    }
     ctx.closePath();
   };
 
@@ -134,7 +148,7 @@ export default function App() {
   const redrawAllSegments = () => {
     clearCanvasLocal();
     allSegmentsRef.current.forEach(d => {
-      drawOnCanvas(d.prevX, d.prevY, d.currX, d.currY, d.color, d.lineWidth);
+      drawSegment(d);
     });
   };
 
@@ -174,7 +188,8 @@ export default function App() {
   const handleStartDrawing = (e) => {
     const coords = getCoordinates(e);
     prevCoordRef.current = coords;
-    strokeIdRef.current = Math.random().toString(36).substring(2, 15); // Tạo ID duy nhất cho nét vẽ này
+    startCoordRef.current = coords;
+    strokeIdRef.current = Math.random().toString(36).substring(2, 15); // Tạo ID duy nhất cho nét vẽ/hình khối
     setIsDrawing(true);
   };
 
@@ -185,43 +200,92 @@ export default function App() {
     const currentColor = tool === 'eraser' ? '#ffffff' : color;
     const currentWidth = tool === 'eraser' ? lineWidth * 2.5 : lineWidth;
 
-    const segment = {
-      prevX: prevCoordRef.current.x,
-      prevY: prevCoordRef.current.y,
-      currX: currentCoords.x,
-      currY: currentCoords.y,
-      color: currentColor,
-      lineWidth: currentWidth,
-      senderId: SENDER_ID,
-      strokeId: strokeIdRef.current,
-    };
+    const isShape = tool === 'rect' || tool === 'circle' || tool === 'line';
 
-    // Vẽ ngay lập tức lên màn hình của mình
-    drawOnCanvas(
-      segment.prevX,
-      segment.prevY,
-      segment.currX,
-      segment.currY,
-      segment.color,
-      segment.lineWidth
-    );
+    if (isShape) {
+      // Nếu vẽ hình khối, ta chỉ vẽ "nháp" (preview) lên màn hình của mình
+      // Bằng cách xóa sạch canvas, vẽ lại tất cả các nét cũ, rồi vẽ hình nháp hiện tại
+      redrawAllSegments();
+      
+      const previewSegment = {
+        prevX: startCoordRef.current.x,
+        prevY: startCoordRef.current.y,
+        currX: currentCoords.x,
+        currY: currentCoords.y,
+        color: currentColor,
+        lineWidth: currentWidth,
+        type: tool,
+      };
+      drawSegment(previewSegment, true);
+    } else {
+      // Nếu là bút hoặc tẩy, ta vẽ liên tục và bắn dữ liệu đi ngay
+      const segment = {
+        prevX: prevCoordRef.current.x,
+        prevY: prevCoordRef.current.y,
+        currX: currentCoords.x,
+        currY: currentCoords.y,
+        color: currentColor,
+        lineWidth: currentWidth,
+        senderId: SENDER_ID,
+        strokeId: strokeIdRef.current,
+        type: tool,
+      };
 
-    // Lưu vào bộ nhớ local
-    allSegmentsRef.current.push(segment);
+      drawSegment(segment);
+      allSegmentsRef.current.push(segment);
 
-    // Bắn tọa độ qua WebSocket
-    if (stompClientRef.current && stompClientRef.current.connected) {
-      stompClientRef.current.publish({
-        destination: '/app/draw',
-        body: JSON.stringify(segment),
-      });
+      if (stompClientRef.current && stompClientRef.current.connected) {
+        stompClientRef.current.publish({
+          destination: '/app/draw',
+          body: JSON.stringify(segment),
+        });
+      }
     }
 
     prevCoordRef.current = currentCoords;
   };
 
-  const handleStopDrawing = () => {
+  const handleStopDrawing = (e) => {
+    if (!isDrawing) return;
     setIsDrawing(false);
+
+    const isShape = tool === 'rect' || tool === 'circle' || tool === 'line';
+    
+    // Nếu vẽ hình khối, lúc nhả chuột ta mới chốt hình và gửi lên server
+    if (isShape) {
+      const currentCoords = prevCoordRef.current; // Tọa độ cuối cùng
+      const currentColor = color;
+      
+      // Bỏ qua nếu click mà không kéo (khoảng cách quá nhỏ)
+      const dx = currentCoords.x - startCoordRef.current.x;
+      const dy = currentCoords.y - startCoordRef.current.y;
+      if (Math.abs(dx) < 2 && Math.abs(dy) < 2) {
+         redrawAllSegments();
+         return;
+      }
+
+      const segment = {
+        prevX: startCoordRef.current.x,
+        prevY: startCoordRef.current.y,
+        currX: currentCoords.x,
+        currY: currentCoords.y,
+        color: currentColor,
+        lineWidth: lineWidth,
+        senderId: SENDER_ID,
+        strokeId: strokeIdRef.current,
+        type: tool,
+      };
+
+      allSegmentsRef.current.push(segment);
+      redrawAllSegments(); // Vẽ lại chính thức
+
+      if (stompClientRef.current && stompClientRef.current.connected) {
+        stompClientRef.current.publish({
+          destination: '/app/draw',
+          body: JSON.stringify(segment),
+        });
+      }
+    }
   };
 
   // 5. Thao tác bảng
@@ -269,12 +333,12 @@ export default function App() {
 
       {/* Thanh công cụ vẽ */}
       <div className="floating-toolbar">
-        {/* Chọn chế độ: Bút hoặc Tẩy */}
+        {/* Chọn chế độ vẽ */}
         <div className="tool-group">
           <button 
             className={`tool-btn ${tool === 'pen' ? 'active' : ''}`}
             onClick={() => setTool('pen')}
-            title="Bút vẽ"
+            title="Bút vẽ tự do"
           >
             <Pen size={18} />
           </button>
@@ -285,12 +349,35 @@ export default function App() {
           >
             <Eraser size={18} />
           </button>
+          
+          {/* Các công cụ hình khối */}
+          <button 
+            className={`tool-btn ${tool === 'line' ? 'active' : ''}`}
+            onClick={() => setTool('line')}
+            title="Kẻ đường thẳng"
+          >
+            <Minus size={18} />
+          </button>
+          <button 
+            className={`tool-btn ${tool === 'rect' ? 'active' : ''}`}
+            onClick={() => setTool('rect')}
+            title="Vẽ hình chữ nhật"
+          >
+            <Square size={18} />
+          </button>
+          <button 
+            className={`tool-btn ${tool === 'circle' ? 'active' : ''}`}
+            onClick={() => setTool('circle')}
+            title="Vẽ hình tròn"
+          >
+            <Circle size={18} />
+          </button>
         </div>
 
         <div className="divider" />
 
         {/* Bảng chọn màu sắc */}
-        {tool === 'pen' && (
+        {tool !== 'eraser' && (
           <>
             <div className="color-picker-group">
               <input 
@@ -298,7 +385,7 @@ export default function App() {
                 className="color-picker-input"
                 value={color}
                 onChange={(e) => setColor(e.target.value)}
-                title="Chọn màu tự do"
+                title="Chọn màu"
               />
             </div>
             <div className="divider" />
