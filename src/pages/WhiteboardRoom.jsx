@@ -33,7 +33,7 @@ export default function WhiteboardRoom() {
   });
 
   const activeUser = user || {
-    name: 'Ẩn danh',
+    name: 'Anonymous',
     picture: 'https://ui-avatars.com/api/?name=A&background=0f172a&color=fff'
   };
 
@@ -58,7 +58,7 @@ export default function WhiteboardRoom() {
   // Bắt buộc đăng nhập nếu đang ở phòng riêng
   useEffect(() => {
     if (roomId !== 'PUBLIC' && !user) {
-      alert("Bạn cần đăng nhập để truy cập phòng riêng!");
+      alert("You must be logged in to access private rooms!");
       navigate('/');
     }
   }, [roomId, user, navigate]);
@@ -181,7 +181,7 @@ export default function WhiteboardRoom() {
       allSegmentsRef.current = drawings;
       redrawAllSegments();
     } catch (err) {
-      console.error('Không thể tải nét vẽ cũ:', err);
+      console.error('Failed to load previous drawings:', err);
     }
   };
 
@@ -292,7 +292,7 @@ export default function WhiteboardRoom() {
   };
 
   const handleClearBoard = () => {
-    if (window.confirm('Bạn có chắc chắn muốn xóa sạch bảng vẽ của phòng này?')) {
+    if (window.confirm('Are you sure you want to clear the whiteboard for this room?')) {
       allSegmentsRef.current = [];
       clearCanvasLocal();
       if (stompClientRef.current && stompClientRef.current.connected) {
@@ -354,7 +354,7 @@ export default function WhiteboardRoom() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div className={`status-dot ${isConnected ? '' : 'offline'}`} />
           <span className="brand-title">
-            {roomId === 'PUBLIC' ? 'Phòng Công Cộng' : `Phòng: ${roomId}`}
+            {roomId === 'PUBLIC' ? 'Public Room' : `Room: ${roomId}`}
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
@@ -362,7 +362,7 @@ export default function WhiteboardRoom() {
           <span>{activeUser.name}</span>
           
           {user && (
-            <button onClick={handleLogout} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', marginLeft: '4px' }} title="Đăng xuất">
+            <button onClick={handleLogout} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', marginLeft: '4px' }} title="Logout">
               <LogOut size={14} />
             </button>
           )}
@@ -374,19 +374,30 @@ export default function WhiteboardRoom() {
         {roomId !== 'PUBLIC' ? (
            <button 
              onClick={() => navigate('/')}
-             className="tool-btn" 
-             style={{ padding: '8px 16px', borderRadius: '8px', width: 'auto', background: 'white' }}
+             style={{ 
+               padding: '10px 18px', borderRadius: '12px', background: 'rgba(30, 41, 59, 0.8)', 
+               color: 'white', border: '1px solid #334155', backdropFilter: 'blur(10px)',
+               cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px',
+               boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)', fontWeight: '500', transition: 'all 0.2s'
+             }}
+             onMouseOver={(e) => e.currentTarget.style.background = 'rgba(51, 65, 85, 0.9)'}
+             onMouseOut={(e) => e.currentTarget.style.background = 'rgba(30, 41, 59, 0.8)'}
            >
-             Trở về Phòng Công Cộng
+             Return to Public Room
            </button>
         ) : (
            <button 
              onClick={() => setShowModal(true)}
-             className="tool-btn" 
-             style={{ padding: '8px 16px', borderRadius: '8px', width: 'auto', background: '#3b82f6', color: 'white' }}
+             style={{ 
+               padding: '10px 18px', borderRadius: '12px', background: 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)', 
+               color: 'white', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px',
+               boxShadow: '0 10px 15px -3px rgba(59, 130, 246, 0.4)', fontWeight: 'bold', transition: 'transform 0.2s'
+             }}
+             onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
+             onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
            >
-             <Lock size={16} style={{ marginRight: '6px' }}/>
-             Vào Phòng Riêng
+             <Lock size={16} />
+             Private Rooms
            </button>
         )}
       </div>
@@ -409,12 +420,12 @@ export default function WhiteboardRoom() {
               <X size={20} />
             </button>
 
-            <h2 style={{ marginTop: 0, marginBottom: '20px', textAlign: 'center' }}>Phòng Bí Mật</h2>
+            <h2 style={{ marginTop: 0, marginBottom: '20px', textAlign: 'center' }}>Private Rooms</h2>
             
             {!user ? (
               <div style={{ textAlign: 'center' }}>
                 <p style={{ color: '#cbd5e1', marginBottom: '20px', fontSize: '14px' }}>
-                  Bạn cần đăng nhập để tạo hoặc tham gia phòng vẽ riêng tư.
+                  Log in to create or join a private whiteboard room.
                 </p>
                 <div style={{ display: 'flex', justifyContent: 'center' }}>
                   <GoogleLogin
@@ -428,22 +439,22 @@ export default function WhiteboardRoom() {
                 <button 
                   onClick={createRoom}
                   style={{
-                    padding: '12px', background: '#3b82f6', color: 'white', 
+                    padding: '12px', background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', color: 'white', 
                     border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold'
                   }}
                 >
-                  Tạo phòng mới
+                  Create New Room
                 </button>
-                <div style={{ textAlign: 'center', color: '#64748b', fontSize: '12px' }}>hoặc</div>
+                <div style={{ textAlign: 'center', color: '#64748b', fontSize: '12px', fontWeight: 'bold' }}>OR</div>
                 <form onSubmit={joinRoom} style={{ display: 'flex', gap: '8px' }}>
                   <input 
                     type="text" 
-                    placeholder="Nhập mã phòng" 
+                    placeholder="Enter Room Code" 
                     value={roomInput}
                     onChange={(e) => setRoomInput(e.target.value)}
                     style={{
                       flex: 1, padding: '10px', borderRadius: '8px', 
-                      border: '1px solid #334155', background: '#0f172a', color: 'white'
+                      border: '1px solid #334155', background: '#0f172a', color: 'white', outline: 'none'
                     }}
                   />
                   <button 
@@ -453,7 +464,7 @@ export default function WhiteboardRoom() {
                       border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold'
                     }}
                   >
-                    Vào
+                    Join
                   </button>
                 </form>
               </div>
