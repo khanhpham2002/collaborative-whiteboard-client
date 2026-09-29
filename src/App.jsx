@@ -5,19 +5,8 @@ import {
   Eraser, 
   Trash2, 
   Download, 
-  Users, 
-  CircleDot 
+  Undo2
 } from 'lucide-react';
-
-const COLORS = [
-  '#0f172a', // Black
-  '#ef4444', // Red
-  '#3b82f6', // Blue
-  '#10b981', // Green
-  '#f59e0b', // Amber/Yellow
-  '#8b5cf6', // Purple
-  '#ec4899', // Pink
-];
 
 // Tạo 1 ID ngẫu nhiên cho mỗi tab trình duyệt để phân biệt ai đang vẽ
 const SENDER_ID = Math.random().toString(36).substring(2, 9);
@@ -34,6 +23,8 @@ export default function App() {
 
   // Tọa độ điểm trước đó khi rê chuột
   const prevCoordRef = useRef({ x: 0, y: 0 });
+  const strokeIdRef = useRef(null);
+  const allSegmentsRef = useRef([]); // Lưu trữ toàn bộ nét vẽ để hoàn tác
 
   // 1. Kết nối WebSocket STOMP
   useEffect(() => {
@@ -55,15 +46,28 @@ export default function App() {
         // Lắng nghe kênh vẽ từ những người khác
         client.subscribe('/topic/draw', (message) => {
           const data = JSON.parse(message.body);
+          allSegmentsRef.current.push(data);
+          
           // Nếu nét vẽ đến từ người khác thì vẽ lên canvas của mình
           if (data.senderId !== SENDER_ID) {
             drawOnCanvas(data.prevX, data.prevY, data.currX, data.currY, data.color, data.lineWidth);
           }
         });
 
-        // Lắng nghe lệnh xóa trắng bảng từ người khác
+        // Lắng nghe lệnh xóa trắng bảng
         client.subscribe('/topic/clear', () => {
+          allSegmentsRef.current = [];
           clearCanvasLocal();
+        });
+
+        // Lắng nghe lệnh hoàn tác
+        client.subscribe('/topic/undo', (message) => {
+          const data = JSON.parse(message.body);
+          if (data.strokeId) {
+            // Lọc bỏ tất cả các đoạn thẳng có cùng strokeId
+            allSegmentsRef.current = allSegmentsRef.current.filter(s => s.strokeId !== data.strokeId);
+            redrawAllSegments();
+          }
         });
 
         // Tải lại toàn bộ nét vẽ đã có từ server cho người mới vào
@@ -92,20 +96,9 @@ export default function App() {
     if (!canvas) return;
 
     const resizeCanvas = () => {
-      // Lưu lại nội dung vẽ cũ trước khi resize
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = canvas.width;
-      tempCanvas.height = canvas.height;
-      const tempCtx = tempCanvas.getContext('2d');
-      tempCtx.drawImage(canvas, 0, 0);
-
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
-
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(tempCanvas, 0, 0);
+      redrawAllSegments();
     };
 
     resizeCanvas();
@@ -113,7 +106,7 @@ export default function App() {
     return () => window.removeEventListener('resize', resizeCanvas);
   }, []);
 
-  // 3. Hàm vẽ đường thẳng trên Canvas
+  // 3. Hàm vẽ
   const drawOnCanvas = (x1, y1, x2, y2, strokeColor, strokeWidth) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -138,20 +131,25 @@ export default function App() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   };
 
+  const redrawAllSegments = () => {
+    clearCanvasLocal();
+    allSegmentsRef.current.forEach(d => {
+      drawOnCanvas(d.prevX, d.prevY, d.currX, d.currY, d.color, d.lineWidth);
+    });
+  };
+
   // Tải lại toàn bộ nét vẽ từ server khi người dùng mới kết nối
   const loadExistingDrawings = async () => {
     try {
       const backendUrl = import.meta.env.VITE_BACKEND_URL || `${window.location.protocol}//${window.location.hostname}:8088`;
-
       const response = await fetch(`${backendUrl}/api/drawings`);
       if (!response.ok) throw new Error('Failed to load drawings');
 
       const drawings = await response.json();
       console.log(`📥 Tải lại ${drawings.length} nét vẽ từ server`);
-
-      drawings.forEach((d) => {
-        drawOnCanvas(d.prevX, d.prevY, d.currX, d.currY, d.color, d.lineWidth);
-      });
+      
+      allSegmentsRef.current = drawings;
+      redrawAllSegments();
     } catch (err) {
       console.error('Không thể tải nét vẽ cũ:', err);
     }
@@ -176,6 +174,7 @@ export default function App() {
   const handleStartDrawing = (e) => {
     const coords = getCoordinates(e);
     prevCoordRef.current = coords;
+    strokeIdRef.current = Math.random().toString(36).substring(2, 15); // Tạo ID duy nhất cho nét vẽ này
     setIsDrawing(true);
   };
 
@@ -186,29 +185,35 @@ export default function App() {
     const currentColor = tool === 'eraser' ? '#ffffff' : color;
     const currentWidth = tool === 'eraser' ? lineWidth * 2.5 : lineWidth;
 
-    // Vẽ ngay lập tức lên màn hình của mình (độ trễ = 0ms)
+    const segment = {
+      prevX: prevCoordRef.current.x,
+      prevY: prevCoordRef.current.y,
+      currX: currentCoords.x,
+      currY: currentCoords.y,
+      color: currentColor,
+      lineWidth: currentWidth,
+      senderId: SENDER_ID,
+      strokeId: strokeIdRef.current,
+    };
+
+    // Vẽ ngay lập tức lên màn hình của mình
     drawOnCanvas(
-      prevCoordRef.current.x,
-      prevCoordRef.current.y,
-      currentCoords.x,
-      currentCoords.y,
-      currentColor,
-      currentWidth
+      segment.prevX,
+      segment.prevY,
+      segment.currX,
+      segment.currY,
+      segment.color,
+      segment.lineWidth
     );
 
-    // Bắn tọa độ qua WebSocket cho tất cả mọi người cùng thấy
+    // Lưu vào bộ nhớ local
+    allSegmentsRef.current.push(segment);
+
+    // Bắn tọa độ qua WebSocket
     if (stompClientRef.current && stompClientRef.current.connected) {
       stompClientRef.current.publish({
         destination: '/app/draw',
-        body: JSON.stringify({
-          prevX: prevCoordRef.current.x,
-          prevY: prevCoordRef.current.y,
-          currX: currentCoords.x,
-          currY: currentCoords.y,
-          color: currentColor,
-          lineWidth: currentWidth,
-          senderId: SENDER_ID,
-        }),
+        body: JSON.stringify(segment),
       });
     }
 
@@ -219,9 +224,19 @@ export default function App() {
     setIsDrawing(false);
   };
 
-  // 5. Gửi lệnh xóa trắng bảng
+  // 5. Thao tác bảng
+  const handleUndo = () => {
+    if (stompClientRef.current && stompClientRef.current.connected) {
+      stompClientRef.current.publish({
+        destination: '/app/undo',
+        body: JSON.stringify({ senderId: SENDER_ID }),
+      });
+    }
+  };
+
   const handleClearBoard = () => {
     if (window.confirm('Bạn có chắc chắn muốn xóa sạch bảng vẽ của tất cả mọi người?')) {
+      allSegmentsRef.current = [];
       clearCanvasLocal();
       if (stompClientRef.current && stompClientRef.current.connected) {
         stompClientRef.current.publish({
@@ -232,7 +247,6 @@ export default function App() {
     }
   };
 
-  // 6. Tải ảnh canvas về máy tính
   const handleDownload = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -248,12 +262,12 @@ export default function App() {
       <div className="header-badge">
         <div className={`status-dot ${isConnected ? '' : 'offline'}`} />
         <span className="brand-title">Live Whiteboard</span>
-        <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
-          {isConnected ? '● Trực tuyến' : '○ Đang kết nối lại...'}
+        <span className="status-text">
+          {isConnected ? '● Trực tuyến' : '○ Đang kết nối...'}
         </span>
       </div>
 
-      {/* Thanh công cụ vẽ nổi ở giữa màn hình */}
+      {/* Thanh công cụ vẽ */}
       <div className="floating-toolbar">
         {/* Chọn chế độ: Bút hoặc Tẩy */}
         <div className="tool-group">
@@ -279,14 +293,13 @@ export default function App() {
         {tool === 'pen' && (
           <>
             <div className="color-picker-group">
-              {COLORS.map((c) => (
-                <div 
-                  key={c}
-                  className={`color-dot ${color === c ? 'selected' : ''}`}
-                  style={{ backgroundColor: c }}
-                  onClick={() => setColor(c)}
-                />
-              ))}
+              <input 
+                type="color" 
+                className="color-picker-input"
+                value={color}
+                onChange={(e) => setColor(e.target.value)}
+                title="Chọn màu tự do"
+              />
             </div>
             <div className="divider" />
           </>
@@ -297,7 +310,7 @@ export default function App() {
           <input 
             type="range" 
             min="2" 
-            max="24" 
+            max="40" 
             value={lineWidth} 
             onChange={(e) => setLineWidth(Number(e.target.value))}
             title={`Nét vẽ: ${lineWidth}px`}
@@ -307,8 +320,15 @@ export default function App() {
 
         <div className="divider" />
 
-        {/* Thao tác xóa bảng và tải ảnh */}
+        {/* Thao tác bảng */}
         <div className="tool-group">
+          <button 
+            className="tool-btn" 
+            onClick={handleUndo}
+            title="Hoàn tác (Undo)"
+          >
+            <Undo2 size={18} />
+          </button>
           <button 
             className="tool-btn danger" 
             onClick={handleClearBoard}
@@ -319,7 +339,7 @@ export default function App() {
           <button 
             className="tool-btn" 
             onClick={handleDownload}
-            title="Tải ảnh vẽ về máy (PNG)"
+            title="Tải ảnh vẽ về máy"
           >
             <Download size={18} />
           </button>
@@ -336,11 +356,8 @@ export default function App() {
         onTouchStart={handleStartDrawing}
         onTouchMove={handleDrawing}
         onTouchEnd={handleStopDrawing}
+        onTouchCancel={handleStopDrawing}
       />
-
-      <div className="bottom-hint">
-        🎨 Mở 2 tab trình duyệt song song để thấy nét vẽ di chuyển thời gian thực!
-      </div>
     </div>
   );
 }
