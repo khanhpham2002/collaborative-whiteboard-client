@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { Client } from '@stomp/stompjs';
+import { GoogleLogin } from '@react-oauth/google';
+import { jwtDecode } from "jwt-decode";
 import { 
   Pen, 
   Eraser, 
@@ -9,44 +11,60 @@ import {
   Undo2,
   Square,
   Circle,
-  Minus
+  Minus,
+  Lock,
+  LogOut,
+  X
 } from 'lucide-react';
 
 // Tạo 1 ID ngẫu nhiên cho mỗi tab trình duyệt để phân biệt ai đang vẽ
 const SENDER_ID = Math.random().toString(36).substring(2, 9);
 
 export default function WhiteboardRoom() {
-  const { roomId } = useParams();
+  const { roomId = 'PUBLIC' } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const user = location.state?.user;
+  
+  // Khôi phục user từ location.state hoặc localStorage
+  const [user, setUser] = useState(() => {
+    if (location.state?.user) return location.state.user;
+    const saved = localStorage.getItem('wb_user');
+    return saved ? JSON.parse(saved) : null;
+  });
 
-  // Nếu chưa đăng nhập, đá về trang chủ
-  useEffect(() => {
-    if (!user) {
-      navigate('/');
-    }
-  }, [user, navigate]);
+  const activeUser = user || {
+    name: 'Ẩn danh',
+    picture: 'https://ui-avatars.com/api/?name=A&background=0f172a&color=fff'
+  };
+
+  // State quản lý Modal Phòng riêng
+  const [showModal, setShowModal] = useState(false);
+  const [roomInput, setRoomInput] = useState('');
 
   const canvasRef = useRef(null);
   const stompClientRef = useRef(null);
 
   const [isConnected, setIsConnected] = useState(false);
-  const [tool, setTool] = useState('pen'); // 'pen' | 'eraser' | 'rect' | 'circle' | 'line'
+  const [tool, setTool] = useState('pen'); 
   const [color, setColor] = useState('#0f172a');
   const [lineWidth, setLineWidth] = useState(4);
   const [isDrawing, setIsDrawing] = useState(false);
 
-  // Tọa độ điểm trước đó khi rê chuột
   const prevCoordRef = useRef({ x: 0, y: 0 });
-  // Tọa độ điểm bắt đầu khi vẽ hình khối
   const startCoordRef = useRef({ x: 0, y: 0 });
   const strokeIdRef = useRef(null);
-  const allSegmentsRef = useRef([]); // Lưu trữ toàn bộ nét vẽ để hoàn tác
+  const allSegmentsRef = useRef([]);
+
+  // Bắt buộc đăng nhập nếu đang ở phòng riêng
+  useEffect(() => {
+    if (roomId !== 'PUBLIC' && !user) {
+      alert("Bạn cần đăng nhập để truy cập phòng riêng!");
+      navigate('/');
+    }
+  }, [roomId, user, navigate]);
 
   // 1. Kết nối WebSocket STOMP
   useEffect(() => {
-    // Xác định backend URL từ env variable hoặc mặc định cho local dev
     const backendUrl = import.meta.env.VITE_BACKEND_URL || `${window.location.protocol}//${window.location.hostname}:8088`;
     const wsProtocol = backendUrl.startsWith('https') ? 'wss:' : 'ws:';
     const backendHost = backendUrl.replace(/^https?:\/\//, '');
@@ -58,46 +76,34 @@ export default function WhiteboardRoom() {
       heartbeatIncoming: 4000,
       heartbeatOutgoing: 4000,
       onConnect: () => {
-        console.log('✅ WebSocket Connected to', brokerURL);
         setIsConnected(true);
 
-        // Lắng nghe kênh vẽ của phòng này
         client.subscribe(`/topic/room/${roomId}/draw`, (message) => {
           const data = JSON.parse(message.body);
           allSegmentsRef.current.push(data);
-          
-          // Nếu nét vẽ đến từ người khác thì vẽ lên canvas của mình
           if (data.senderId !== SENDER_ID) {
             drawSegment(data);
           }
         });
 
-        // Lắng nghe lệnh xóa trắng bảng
         client.subscribe(`/topic/room/${roomId}/clear`, () => {
           allSegmentsRef.current = [];
           clearCanvasLocal();
         });
 
-        // Lắng nghe lệnh hoàn tác
         client.subscribe(`/topic/room/${roomId}/undo`, (message) => {
           const data = JSON.parse(message.body);
           if (data.strokeId) {
-            // Lọc bỏ tất cả các đoạn thẳng có cùng strokeId
             allSegmentsRef.current = allSegmentsRef.current.filter(s => s.strokeId !== data.strokeId);
             redrawAllSegments();
           }
         });
 
-        // Tải lại toàn bộ nét vẽ đã có từ server cho người mới vào
         loadExistingDrawings();
       },
       onDisconnect: () => {
-        console.log('❌ WebSocket Disconnected');
         setIsConnected(false);
       },
-      onStompError: (frame) => {
-        console.error('Broker error:', frame.headers['message']);
-      }
     });
 
     client.activate();
@@ -106,7 +112,7 @@ export default function WhiteboardRoom() {
     return () => {
       client.deactivate();
     };
-  }, []);
+  }, [roomId]); // Re-connect if roomId changes
 
   // 2. Khởi tạo kích thước Canvas
   useEffect(() => {
@@ -165,7 +171,6 @@ export default function WhiteboardRoom() {
     });
   };
 
-  // Tải lại toàn bộ nét vẽ từ server khi người dùng mới kết nối
   const loadExistingDrawings = async () => {
     try {
       const backendUrl = import.meta.env.VITE_BACKEND_URL || `${window.location.protocol}//${window.location.hostname}:8088`;
@@ -173,8 +178,6 @@ export default function WhiteboardRoom() {
       if (!response.ok) throw new Error('Failed to load drawings');
 
       const drawings = await response.json();
-      console.log(`📥 Tải lại ${drawings.length} nét vẽ từ server`);
-      
       allSegmentsRef.current = drawings;
       redrawAllSegments();
     } catch (err) {
@@ -182,27 +185,21 @@ export default function WhiteboardRoom() {
     }
   };
 
-  // 4. Bắt sự kiện chuột & cảm ứng (Mouse & Touch)
+  // 4. Bắt sự kiện chuột & cảm ứng
   const getCoordinates = (e) => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     if (e.touches && e.touches[0]) {
-      return {
-        x: e.touches[0].clientX - rect.left,
-        y: e.touches[0].clientY - rect.top,
-      };
+      return { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
     }
-    return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-    };
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   };
 
   const handleStartDrawing = (e) => {
     const coords = getCoordinates(e);
     prevCoordRef.current = coords;
     startCoordRef.current = coords;
-    strokeIdRef.current = Math.random().toString(36).substring(2, 15); // Tạo ID duy nhất cho nét vẽ/hình khối
+    strokeIdRef.current = Math.random().toString(36).substring(2, 15);
     setIsDrawing(true);
   };
 
@@ -212,36 +209,22 @@ export default function WhiteboardRoom() {
     const currentCoords = getCoordinates(e);
     const currentColor = tool === 'eraser' ? '#ffffff' : color;
     const currentWidth = tool === 'eraser' ? lineWidth * 2.5 : lineWidth;
-
     const isShape = tool === 'rect' || tool === 'circle' || tool === 'line';
 
     if (isShape) {
-      // Nếu vẽ hình khối, ta chỉ vẽ "nháp" (preview) lên màn hình của mình
-      // Bằng cách xóa sạch canvas, vẽ lại tất cả các nét cũ, rồi vẽ hình nháp hiện tại
       redrawAllSegments();
-      
       const previewSegment = {
-        prevX: startCoordRef.current.x,
-        prevY: startCoordRef.current.y,
-        currX: currentCoords.x,
-        currY: currentCoords.y,
-        color: currentColor,
-        lineWidth: currentWidth,
-        type: tool,
+        prevX: startCoordRef.current.x, prevY: startCoordRef.current.y,
+        currX: currentCoords.x, currY: currentCoords.y,
+        color: currentColor, lineWidth: currentWidth, type: tool,
       };
       drawSegment(previewSegment, true);
     } else {
-      // Nếu là bút hoặc tẩy, ta vẽ liên tục và bắn dữ liệu đi ngay
       const segment = {
-        prevX: prevCoordRef.current.x,
-        prevY: prevCoordRef.current.y,
-        currX: currentCoords.x,
-        currY: currentCoords.y,
-        color: currentColor,
-        lineWidth: currentWidth,
-        senderId: SENDER_ID,
-        strokeId: strokeIdRef.current,
-        type: tool,
+        prevX: prevCoordRef.current.x, prevY: prevCoordRef.current.y,
+        currX: currentCoords.x, currY: currentCoords.y,
+        color: currentColor, lineWidth: currentWidth,
+        senderId: SENDER_ID, strokeId: strokeIdRef.current, type: tool,
       };
 
       drawSegment(segment);
@@ -254,7 +237,6 @@ export default function WhiteboardRoom() {
         });
       }
     }
-
     prevCoordRef.current = currentCoords;
   };
 
@@ -264,12 +246,8 @@ export default function WhiteboardRoom() {
 
     const isShape = tool === 'rect' || tool === 'circle' || tool === 'line';
     
-    // Nếu vẽ hình khối, lúc nhả chuột ta mới chốt hình và gửi lên server
     if (isShape) {
-      const currentCoords = prevCoordRef.current; // Tọa độ cuối cùng
-      const currentColor = color;
-      
-      // Bỏ qua nếu click mà không kéo (khoảng cách quá nhỏ)
+      const currentCoords = prevCoordRef.current;
       const dx = currentCoords.x - startCoordRef.current.x;
       const dy = currentCoords.y - startCoordRef.current.y;
       if (Math.abs(dx) < 2 && Math.abs(dy) < 2) {
@@ -278,19 +256,14 @@ export default function WhiteboardRoom() {
       }
 
       const segment = {
-        prevX: startCoordRef.current.x,
-        prevY: startCoordRef.current.y,
-        currX: currentCoords.x,
-        currY: currentCoords.y,
-        color: currentColor,
-        lineWidth: lineWidth,
-        senderId: SENDER_ID,
-        strokeId: strokeIdRef.current,
-        type: tool,
+        prevX: startCoordRef.current.x, prevY: startCoordRef.current.y,
+        currX: currentCoords.x, currY: currentCoords.y,
+        color: color, lineWidth: lineWidth,
+        senderId: SENDER_ID, strokeId: strokeIdRef.current, type: tool,
       };
 
       allSegmentsRef.current.push(segment);
-      redrawAllSegments(); // Vẽ lại chính thức
+      redrawAllSegments();
 
       if (stompClientRef.current && stompClientRef.current.connected) {
         stompClientRef.current.publish({
@@ -303,18 +276,13 @@ export default function WhiteboardRoom() {
 
   // 5. Thao tác bảng
   const handleUndo = () => {
-    // 1. Optimistic UI Update: Phản hồi ngay lập tức trên màn hình của mình (độ trễ 0ms)
     const mySegments = allSegmentsRef.current.filter(s => s.senderId === SENDER_ID);
     if (mySegments.length > 0) {
-      // Tìm ID của nét vẽ cuối cùng mình vừa vẽ
       const lastStrokeId = mySegments[mySegments.length - 1].strokeId;
-      
-      // Xóa nét vẽ đó khỏi bộ nhớ tạm và vẽ lại màn hình ngay lập tức
       allSegmentsRef.current = allSegmentsRef.current.filter(s => s.strokeId !== lastStrokeId);
       redrawAllSegments();
     }
 
-    // 2. Gửi lệnh lên server để xóa trong DB và đồng bộ với màn hình của người khác
     if (stompClientRef.current && stompClientRef.current.connected) {
       stompClientRef.current.publish({
         destination: `/app/room/${roomId}/undo`,
@@ -340,140 +308,192 @@ export default function WhiteboardRoom() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const link = document.createElement('a');
-    link.download = `whiteboard-${Date.now()}.png`;
+    link.download = `whiteboard-${roomId}-${Date.now()}.png`;
     link.href = canvas.toDataURL('image/png');
     link.click();
   };
 
-  if (!user) return null; // Chống flash màn hình khi chưa render xong useEffect
+  // 6. Xử lý Đăng nhập & Modal
+  const handleLoginSuccess = (credentialResponse) => {
+    const decoded = jwtDecode(credentialResponse.credential);
+    const loggedInUser = {
+      name: decoded.name,
+      email: decoded.email,
+      picture: decoded.picture
+    };
+    setUser(loggedInUser);
+    localStorage.setItem('wb_user', JSON.stringify(loggedInUser));
+  };
+
+  const createRoom = () => {
+    const newRoomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+    setShowModal(false);
+    navigate(`/room/${newRoomId}`);
+  };
+
+  const joinRoom = (e) => {
+    e.preventDefault();
+    if (roomInput.trim()) {
+      setShowModal(false);
+      navigate(`/room/${roomInput.trim().toUpperCase()}`);
+    }
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    localStorage.removeItem('wb_user');
+    if (roomId !== 'PUBLIC') {
+      navigate('/');
+    }
+  };
 
   return (
     <div className="whiteboard-container">
-      {/* Góc trên bên trái: Trạng thái kết nối */}
+      {/* Góc trên bên trái: Trạng thái */}
       <div className="header-badge" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div className={`status-dot ${isConnected ? '' : 'offline'}`} />
-          <span className="brand-title">Phòng: {roomId}</span>
+          <span className="brand-title">
+            {roomId === 'PUBLIC' ? 'Phòng Công Cộng' : `Phòng: ${roomId}`}
+          </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
-          <img src={user.picture} alt="" style={{ width: '16px', borderRadius: '50%' }} />
-          <span>{user.name}</span>
+          <img src={activeUser.picture} alt="" style={{ width: '16px', borderRadius: '50%' }} />
+          <span>{activeUser.name}</span>
+          
+          {user && (
+            <button onClick={handleLogout} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', marginLeft: '4px' }} title="Đăng xuất">
+              <LogOut size={14} />
+            </button>
+          )}
         </div>
       </div>
 
+      {/* Nút Tạo/Vào Phòng riêng (Góc trên bên phải) */}
+      <div style={{ position: 'absolute', top: '20px', right: '20px', zIndex: 10 }}>
+        {roomId !== 'PUBLIC' ? (
+           <button 
+             onClick={() => navigate('/')}
+             className="tool-btn" 
+             style={{ padding: '8px 16px', borderRadius: '8px', width: 'auto', background: 'white' }}
+           >
+             Trở về Phòng Công Cộng
+           </button>
+        ) : (
+           <button 
+             onClick={() => setShowModal(true)}
+             className="tool-btn" 
+             style={{ padding: '8px 16px', borderRadius: '8px', width: 'auto', background: '#3b82f6', color: 'white' }}
+           >
+             <Lock size={16} style={{ marginRight: '6px' }}/>
+             Vào Phòng Riêng
+           </button>
+        )}
+      </div>
+
+      {/* Modal Đăng nhập / Tạo phòng */}
+      {showModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 100,
+          display: 'flex', justifyContent: 'center', alignItems: 'center'
+        }}>
+          <div style={{
+            background: '#1e293b', padding: '30px', borderRadius: '16px', 
+            width: '100%', maxWidth: '350px', color: 'white', position: 'relative'
+          }}>
+            <button 
+              onClick={() => setShowModal(false)}
+              style={{ position: 'absolute', top: '15px', right: '15px', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+            >
+              <X size={20} />
+            </button>
+
+            <h2 style={{ marginTop: 0, marginBottom: '20px', textAlign: 'center' }}>Phòng Bí Mật</h2>
+            
+            {!user ? (
+              <div style={{ textAlign: 'center' }}>
+                <p style={{ color: '#cbd5e1', marginBottom: '20px', fontSize: '14px' }}>
+                  Bạn cần đăng nhập để tạo hoặc tham gia phòng vẽ riêng tư.
+                </p>
+                <div style={{ display: 'flex', justifyContent: 'center' }}>
+                  <GoogleLogin
+                    onSuccess={handleLoginSuccess}
+                    onError={() => console.log('Login Failed')}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                <button 
+                  onClick={createRoom}
+                  style={{
+                    padding: '12px', background: '#3b82f6', color: 'white', 
+                    border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold'
+                  }}
+                >
+                  Tạo phòng mới
+                </button>
+                <div style={{ textAlign: 'center', color: '#64748b', fontSize: '12px' }}>hoặc</div>
+                <form onSubmit={joinRoom} style={{ display: 'flex', gap: '8px' }}>
+                  <input 
+                    type="text" 
+                    placeholder="Nhập mã phòng" 
+                    value={roomInput}
+                    onChange={(e) => setRoomInput(e.target.value)}
+                    style={{
+                      flex: 1, padding: '10px', borderRadius: '8px', 
+                      border: '1px solid #334155', background: '#0f172a', color: 'white'
+                    }}
+                  />
+                  <button 
+                    type="submit"
+                    style={{
+                      padding: '10px 16px', background: '#10b981', color: 'white', 
+                      border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold'
+                    }}
+                  >
+                    Vào
+                  </button>
+                </form>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Thanh công cụ vẽ */}
       <div className="floating-toolbar">
-        {/* Chọn chế độ vẽ */}
         <div className="tool-group">
-          <button 
-            className={`tool-btn ${tool === 'pen' ? 'active' : ''}`}
-            onClick={() => setTool('pen')}
-            title="Bút vẽ tự do"
-          >
-            <Pen size={18} />
-          </button>
-          <button 
-            className={`tool-btn ${tool === 'eraser' ? 'active' : ''}`}
-            onClick={() => setTool('eraser')}
-            title="Cục tẩy"
-          >
-            <Eraser size={18} />
-          </button>
-          
-          {/* Các công cụ hình khối */}
-          <button 
-            className={`tool-btn ${tool === 'line' ? 'active' : ''}`}
-            onClick={() => setTool('line')}
-            title="Kẻ đường thẳng"
-          >
-            <Minus size={18} />
-          </button>
-          <button 
-            className={`tool-btn ${tool === 'rect' ? 'active' : ''}`}
-            onClick={() => setTool('rect')}
-            title="Vẽ hình chữ nhật"
-          >
-            <Square size={18} />
-          </button>
-          <button 
-            className={`tool-btn ${tool === 'circle' ? 'active' : ''}`}
-            onClick={() => setTool('circle')}
-            title="Vẽ hình tròn"
-          >
-            <Circle size={18} />
-          </button>
+          <button className={`tool-btn ${tool === 'pen' ? 'active' : ''}`} onClick={() => setTool('pen')}><Pen size={18} /></button>
+          <button className={`tool-btn ${tool === 'eraser' ? 'active' : ''}`} onClick={() => setTool('eraser')}><Eraser size={18} /></button>
+          <button className={`tool-btn ${tool === 'line' ? 'active' : ''}`} onClick={() => setTool('line')}><Minus size={18} /></button>
+          <button className={`tool-btn ${tool === 'rect' ? 'active' : ''}`} onClick={() => setTool('rect')}><Square size={18} /></button>
+          <button className={`tool-btn ${tool === 'circle' ? 'active' : ''}`} onClick={() => setTool('circle')}><Circle size={18} /></button>
         </div>
-
         <div className="divider" />
-
-        {/* Bảng chọn màu sắc */}
         {tool !== 'eraser' && (
-          <>
-            <div className="color-picker-group">
-              <input 
-                type="color" 
-                className="color-picker-input"
-                value={color}
-                onChange={(e) => setColor(e.target.value)}
-                title="Chọn màu"
-              />
-            </div>
-            <div className="divider" />
-          </>
+          <><div className="color-picker-group">
+              <input type="color" className="color-picker-input" value={color} onChange={(e) => setColor(e.target.value)}/>
+            </div><div className="divider" /></>
         )}
-
-        {/* Chỉnh độ to nhỏ của nét bút */}
         <div className="slider-container">
-          <input 
-            type="range" 
-            min="2" 
-            max="40" 
-            value={lineWidth} 
-            onChange={(e) => setLineWidth(Number(e.target.value))}
-            title={`Nét vẽ: ${lineWidth}px`}
-          />
+          <input type="range" min="2" max="40" value={lineWidth} onChange={(e) => setLineWidth(Number(e.target.value))}/>
           <span>{lineWidth}px</span>
         </div>
-
         <div className="divider" />
-
-        {/* Thao tác bảng */}
         <div className="tool-group">
-          <button 
-            className="tool-btn" 
-            onClick={handleUndo}
-            title="Hoàn tác (Undo)"
-          >
-            <Undo2 size={18} />
-          </button>
-          <button 
-            className="tool-btn danger" 
-            onClick={handleClearBoard}
-            title="Xóa trắng bảng vẽ"
-          >
-            <Trash2 size={18} />
-          </button>
-          <button 
-            className="tool-btn" 
-            onClick={handleDownload}
-            title="Tải ảnh vẽ về máy"
-          >
-            <Download size={18} />
-          </button>
+          <button className="tool-btn" onClick={handleUndo}><Undo2 size={18} /></button>
+          <button className="tool-btn danger" onClick={handleClearBoard}><Trash2 size={18} /></button>
+          <button className="tool-btn" onClick={handleDownload}><Download size={18} /></button>
         </div>
       </div>
 
       {/* Màn hình Canvas chính */}
       <canvas 
         ref={canvasRef}
-        onMouseDown={handleStartDrawing}
-        onMouseMove={handleDrawing}
-        onMouseUp={handleStopDrawing}
-        onMouseLeave={handleStopDrawing}
-        onTouchStart={handleStartDrawing}
-        onTouchMove={handleDrawing}
-        onTouchEnd={handleStopDrawing}
-        onTouchCancel={handleStopDrawing}
+        onMouseDown={handleStartDrawing} onMouseMove={handleDrawing} onMouseUp={handleStopDrawing} onMouseLeave={handleStopDrawing}
+        onTouchStart={handleStartDrawing} onTouchMove={handleDrawing} onTouchEnd={handleStopDrawing} onTouchCancel={handleStopDrawing}
       />
     </div>
   );
