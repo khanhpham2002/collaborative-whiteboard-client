@@ -138,6 +138,14 @@ export default function WhiteboardRoom() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+
+    // Tương thích ngược: Nếu giá trị > 2 thì có thể là dữ liệu cũ (pixel cũ), không nhân tỷ lệ
+    const px = segment.prevX > 2 ? segment.prevX : segment.prevX * w;
+    const py = segment.prevY > 2 ? segment.prevY : segment.prevY * h;
+    const cx = segment.currX > 2 ? segment.currX : segment.currX * w;
+    const cy = segment.currY > 2 ? segment.currY : segment.currY * h;
 
     ctx.beginPath();
     ctx.strokeStyle = segment.color;
@@ -146,14 +154,14 @@ export default function WhiteboardRoom() {
     ctx.lineJoin = 'round';
 
     if (segment.type === 'rect') {
-      ctx.strokeRect(segment.prevX, segment.prevY, segment.currX - segment.prevX, segment.currY - segment.prevY);
+      ctx.strokeRect(px, py, cx - px, cy - py);
     } else if (segment.type === 'circle') {
-      const radius = Math.sqrt(Math.pow(segment.currX - segment.prevX, 2) + Math.pow(segment.currY - segment.prevY, 2));
-      ctx.arc(segment.prevX, segment.prevY, radius, 0, 2 * Math.PI);
+      const radius = Math.sqrt(Math.pow(cx - px, 2) + Math.pow(cy - py, 2));
+      ctx.arc(px, py, radius, 0, 2 * Math.PI);
       ctx.stroke();
     } else { // pen, eraser, line
-      ctx.moveTo(segment.prevX, segment.prevY);
-      ctx.lineTo(segment.currX, segment.currY);
+      ctx.moveTo(px, py);
+      ctx.lineTo(cx, cy);
       ctx.stroke();
     }
     ctx.closePath();
@@ -188,14 +196,23 @@ export default function WhiteboardRoom() {
     }
   };
 
-  // 4. Bắt sự kiện chuột & cảm ứng
+  // 4. Bắt sự kiện chuột & cảm ứng (Lưu tọa độ theo phần trăm 0.0 - 1.0)
   const getCoordinates = (e) => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
+    const w = canvas.width;
+    const h = canvas.height;
+    
     if (e.touches && e.touches[0]) {
-      return { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
+      return { 
+        x: (e.touches[0].clientX - rect.left) / w, 
+        y: (e.touches[0].clientY - rect.top) / h 
+      };
     }
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    return { 
+      x: (e.clientX - rect.left) / w, 
+      y: (e.clientY - rect.top) / h 
+    };
   };
 
   const handleStartDrawing = (e) => {
@@ -251,8 +268,12 @@ export default function WhiteboardRoom() {
     
     if (isShape) {
       const currentCoords = prevCoordRef.current;
-      const dx = currentCoords.x - startCoordRef.current.x;
-      const dy = currentCoords.y - startCoordRef.current.y;
+      const canvas = canvasRef.current;
+      const w = canvas ? canvas.width : 1000;
+      const h = canvas ? canvas.height : 1000;
+      
+      const dx = (currentCoords.x - startCoordRef.current.x) * w;
+      const dy = (currentCoords.y - startCoordRef.current.y) * h;
       if (Math.abs(dx) < 2 && Math.abs(dy) < 2) {
          redrawAllSegments();
          return;
